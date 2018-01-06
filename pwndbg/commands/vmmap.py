@@ -54,3 +54,25 @@ def vmmap(pages_filter=None):
     print(M.legend())
     for page in pages:
         print(M.get(page.vaddr, text=str(page)))
+
+
+addr_parser = argparse.ArgumentParser()
+addr_parser.description = 'Print info about a specific virtual address.'
+addr_parser.add_argument('addr', type=int, help='Address to examine.')
+
+
+@pwndbg.commands.ArgparsedCommand(addr_parser)
+@pwndbg.commands.OnlyWhenRunning
+def xinfo(addr):
+    pages = list(filter(lambda page: addr in page, pwndbg.vmmap.get()))
+
+    if len(pages) == 0:
+        print('There are no mappings for specified address {:#x}.'.format(addr))
+        return
+
+    page = pages[0]
+    print(M.legend())
+    print(M.get(page.vaddr, text=str(page)))
+    print(' Offset: {:#x}'.format(int(addr - page.start)))
+
+    
