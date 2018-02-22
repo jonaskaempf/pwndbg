@@ -7,11 +7,12 @@ from __future__ import unicode_literals
 
 import gdb
 
-import pwndbg.color
+import pwndbg.color.message as message
 import pwndbg.events
 import pwndbg.file
-import pwndbg.remote
 import pwndbg.memoize
+import pwndbg.remote
+
 
 @pwndbg.memoize.reset_on_start
 @pwndbg.memoize.reset_on_exit
@@ -31,7 +32,7 @@ def sysroot():
         if gdb.parameter('sysroot') == 'target:':
             gdb.execute(cmd)
         else:
-            print(pwndbg.color.bold("sysroot is already set, skipping %r" % cmd))
+            print(message.notice("sysroot is already set, skipping %r" % cmd))
 
 KNOWN_AIDS = {
 0: "AID_ROOT",

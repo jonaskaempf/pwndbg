@@ -49,6 +49,7 @@ import pwndbg.commands.theme
 import pwndbg.commands.version
 import pwndbg.commands.vmmap
 import pwndbg.commands.windbg
+import pwndbg.commands.xinfo
 import pwndbg.commands.xor
 import pwndbg.constants
 import pwndbg.disasm
@@ -61,6 +62,7 @@ import pwndbg.disasm.x86
 import pwndbg.dt
 import pwndbg.elf
 import pwndbg.exception
+import pwndbg.gdbutils.functions
 import pwndbg.heap
 import pwndbg.inthook
 import pwndbg.memory
@@ -119,16 +121,11 @@ __all__ = [
 'vmmap'
 ]
 
-prompt = "pwndbg> "
-prompt = "\x02" + prompt + "\x01" # STX + prompt + SOH
-prompt = pwndbg.color.red(prompt)
-prompt = pwndbg.color.bold(prompt)
-prompt = "\x01" + prompt + "\x02" # SOH + prompt + STX
+pwndbg.prompt.set_prompt()
 
 pre_commands = """
 set confirm off
 set verbose off
-set prompt %s
 set pagination off
 set height 0
 set history expansion on
@@ -143,7 +140,7 @@ handle SIGALRM nostop print nopass
 handle SIGBUS  stop   print nopass
 handle SIGPIPE nostop print nopass
 handle SIGSEGV stop   print nopass
-""".strip() % (prompt, pwndbg.ui.get_window_size()[1])
+""".strip() % (pwndbg.ui.get_window_size()[1])
 
 for line in pre_commands.strip().splitlines():
     gdb.execute(line)
