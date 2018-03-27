@@ -26,6 +26,7 @@ import pwndbg.commands.cpsr
 import pwndbg.commands.dt
 import pwndbg.commands.dumpargs
 import pwndbg.commands.elf
+import pwndbg.commands.funcptrs
 import pwndbg.commands.gdbinit
 import pwndbg.commands.got
 import pwndbg.commands.heap
