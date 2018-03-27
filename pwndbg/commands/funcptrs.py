@@ -1,3 +1,4 @@
+import pwndbg
 from pwndbg.memory import u64 as uint64
 from pwndbg.vmmap import find
 import argparse
