@@ -1,6 +1,7 @@
 import pwndbg
 from pwndbg.memory import u64 as uint64
 from pwndbg.vmmap import find
+import gdb
 import argparse
 
 parser = argparse.ArgumentParser(description='Shows offsets of the specified address to useful other locations')
