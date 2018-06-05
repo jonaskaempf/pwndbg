@@ -14,7 +14,6 @@ from builtins import bytes
 import gdb
 
 import pwndbg.arch
-import pwndbg.compat
 import pwndbg.events
 import pwndbg.qemu
 import pwndbg.typeinfo
@@ -69,9 +68,6 @@ def read(addr, count, partial=False):
             # Move down by another page
             stop_addr -= PAGE_SIZE
 
-    # if pwndbg.compat.python3:
-        # result = bytes(result)
-
     return bytearray(result)
 
 
@@ -100,7 +96,10 @@ def write(addr, data):
         addr(int): Address to write
         data(str,bytes,bytearray): Data to write
     """
-    gdb.selected_inferior().write_memory(addr, bytes(data, 'utf8'))
+    if isinstance(data, str):
+        data = bytes(data, 'utf8')
+
+    gdb.selected_inferior().write_memory(addr, data)
 
 
 def peek(address):

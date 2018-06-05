@@ -12,6 +12,7 @@ import argparse
 import codecs
 import math
 import sys
+from builtins import str
 
 import gdb
 
@@ -172,9 +173,15 @@ def eX(size, address, data, hex=True):
     if address is None:
         return
 
-    for i,bytestr in enumerate(data):
+    for i, bytestr in enumerate(data):
         if hex:
+            bytestr = str(bytestr)
+
+            if bytestr.startswith('0x'):
+                bytestr = bytestr[2:]
+
             bytestr = bytestr.rjust(size*2, '0')
+
             data    = codecs.decode(bytestr, 'hex')
         else:
             data    = bytestr

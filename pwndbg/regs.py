@@ -19,7 +19,6 @@ import gdb
 import six
 
 import pwndbg.arch
-import pwndbg.compat
 import pwndbg.events
 import pwndbg.memoize
 import pwndbg.proc
@@ -268,6 +267,7 @@ class module(ModuleType):
     last = {}
 
     @pwndbg.memoize.reset_on_stop
+    @pwndbg.memoize.reset_on_prompt
     def __getattr__(self, attr):
         attr = attr.lstrip('$')
         try:
