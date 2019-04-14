@@ -6,20 +6,53 @@ from __future__ import print_function
 from __future__ import unicode_literals
 
 from collections import OrderedDict
+from collections import namedtuple
 
 import gdb
 
+import pwndbg.color.memory as M
 import pwndbg.events
 import pwndbg.typeinfo
 from pwndbg.color import message
 from pwndbg.constants import ptmalloc
 from pwndbg.heap import heap_chain_limit
 
-HEAP_MAX_SIZE     = 1024 * 1024
+# See https://sourceware.org/git/?p=glibc.git;a=blob;f=malloc/arena.c;h=37183cfb6ab5d0735cc82759626670aff3832cd0;hb=086ee48eaeaba871a2300daf85469671cc14c7e9#l30
+# and https://sourceware.org/git/?p=glibc.git;a=blob;f=malloc/malloc.c;h=f8e7250f70f6f26b0acb5901bcc4f6e39a8a52b2;hb=086ee48eaeaba871a2300daf85469671cc14c7e9#l869
+# 1 Mb (x86) or 64 Mb (x64)
+HEAP_MAX_SIZE = 1024 * 1024 if pwndbg.arch.ptrsize == 4 else 2 * 4 * 1024 * 1024 * 8
+
 
 def heap_for_ptr(ptr):
     "find the heap and corresponding arena for a given ptr"
     return (ptr & ~(HEAP_MAX_SIZE-1))
+
+
+class Arena(object):
+    def __init__(self, addr, heaps):
+        self.addr  = addr
+        self.heaps = heaps
+
+    def __str__(self):
+        res = []
+        prefix = '[%%%ds]    ' % (pwndbg.arch.ptrsize * 2)
+        prefix_len = len(prefix % (''))
+        arena_name = hex(self.addr) if self.addr != pwndbg.heap.current.main_arena.address else 'main'
+        res.append(message.hint(prefix % (arena_name)) + str(self.heaps[0]))
+        for h in self.heaps[1:]:
+            res.append(' ' * prefix_len + str(h))
+
+        return '\n'.join(res)
+
+
+class HeapInfo(object):
+    def __init__(self, addr, first_chunk):
+        self.addr        = addr
+        self.first_chunk = first_chunk
+
+    def __str__(self):
+        fmt = '[%%%ds]' % (pwndbg.arch.ptrsize * 2)
+        return message.hint(fmt % (hex(self.first_chunk))) + M.heap(str(pwndbg.vmmap.find(self.addr)))
 
 
 class Heap(pwndbg.heap.heap.BaseHeap):
@@ -27,6 +60,8 @@ class Heap(pwndbg.heap.heap.BaseHeap):
         # Global ptmalloc objects
         self._main_arena    = None
         self._mp            = None
+        # List of arenas/heaps
+        self._arenas        = None
         # ptmalloc cache for current thread
         self._thread_cache  = None
 
@@ -43,13 +78,92 @@ class Heap(pwndbg.heap.heap.BaseHeap):
 
         return self._main_arena
 
+
+    @property
+    @pwndbg.memoize.reset_on_stop
+    def arenas(self):
+        arena           = self.main_arena
+        arenas          = []
+        arena_cnt       = 0
+        main_arena_addr = int(arena.address)
+        sbrk_page       = self.get_heap_boundaries().vaddr
+
+        # Create the main_arena with a fake HeapInfo
+        main_arena      = Arena(main_arena_addr, [HeapInfo(sbrk_page, sbrk_page)])
+        arenas.append(main_arena)
+
+        # Iterate over all the non-main arenas
+        addr = int(arena['next'])
+        while addr != main_arena_addr:
+            heaps = []
+            arena = self.get_arena(addr)
+            arena_cnt += 1
+
+            # Get the first and last element on the heap linked list of the arena
+            last_heap_addr  = heap_for_ptr(int(arena['top']))
+            first_heap_addr = heap_for_ptr(addr)
+
+            heap = self.get_heap(last_heap_addr)
+            if not heap:
+                print(message.error('Could not find the heap for arena %s' % hex(addr)))
+                return
+
+            # Iterate over the heaps of the arena
+            haddr = last_heap_addr
+            while haddr != 0:
+                if haddr == first_heap_addr:
+                    # The first heap has a heap_info and a malloc_state before the actual chunks
+                    chunks_offset = self.heap_info.sizeof + self.malloc_state.sizeof
+                else:
+                    # The others just
+                    chunks_offset = self.heap_info.sizeof
+                heaps.append(HeapInfo(haddr, haddr + chunks_offset))
+
+                # Name the heap mapping, so that it can be colored properly. Note that due to the way malloc is
+                # optimized, a vm mapping may contain two heaps, so the numbering will not be exact.
+                page = self.get_region(haddr)
+                page.objfile = '[heap %d:%d]' % (arena_cnt, len(heaps))
+                heap = self.get_heap(haddr)
+                haddr = int(heap['prev'])
+
+            # Add to the list of arenas and move on to the next one
+            arenas.append(Arena(addr, tuple(reversed(heaps))))
+            addr = int(arena['next'])
+
+        arenas = tuple(arenas)
+        self._arenas = arenas
+        return arenas
+
+
     def has_tcache(self):
         return (self.mp and 'tcache_bins' in self.mp.type.keys() and self.mp['tcache_bins'])
 
+    def _fetch_tcache_addr(self):
+        """
+        As of Ubuntu 18.04 and glibc 2.27 the tcache_perthread_struct* tcache
+        is located 0x10 bytes after the heap page, so we just return it here.
+
+        pwndbg> p tcache
+        $1 = (tcache_perthread_struct *) 0x555555756010
+        pwndbg> vmmap 0x555555756010
+        LEGEND: STACK | HEAP | CODE | DATA | RWX | RODATA
+            0x555555756000     0x555555777000 rw-p    21000 0      [heap]
+        """
+        return self.get_heap_boundaries().vaddr + 0x10
 
     @property
     def thread_cache(self):
         tcache_addr = pwndbg.symbol.address('tcache')
+
+        # The symbol.address returns ptr to ptr to tcache struct, as in:
+        # pwndbg> p &tcache
+        # $1 = (tcache_perthread_struct **) 0x7ffff7fd76f0
+        # so we need to dereference it
+        if tcache_addr is not None:
+            tcache_addr = pwndbg.memory.pvoid(tcache_addr)
+
+        if tcache_addr is None:
+            tcache_addr = self._fetch_tcache_addr()
 
         if tcache_addr is not None:
             try:
@@ -58,6 +172,7 @@ class Heap(pwndbg.heap.heap.BaseHeap):
             except Exception as e:
                 print(message.error('Error fetching tcache. GDB cannot access '
                                     'thread-local variables unless you compile with -lpthread.'))
+                return None
         else:
             if not self.has_tcache():
                 print(message.warn('Your libc does not use thread cache'))
@@ -251,39 +366,47 @@ class Heap(pwndbg.heap.heap.BaseHeap):
         return pwndbg.memory.poi(self.tcache_perthread_struct, tcache_addr)
 
 
-    def get_region(self,addr=None):
+    def get_heap_boundaries(self, addr=None):
         """
-        Finds the memory region used for heap by using mp_ structure's sbrk_base property
-        and falls back to using /proc/self/maps (vmmap) which can be wrong
-        when .bss is very large
-        For non main-arena heaps use heap_info struct provieded at the beging of the page.
+        Get the boundaries of the heap containing `addr`. Returns the brk region for
+        adresses inside it or a fake Page for the containing heap for non-main arenas.
         """
-
-        if addr:
-            heap  = self.get_heap(addr)
-            base  = int(heap.address) + self.heap_info.sizeof + self.malloc_state.sizeof
-            page  = pwndbg.vmmap.find(base)
-            ## trim whole page to look exactly like heap
-            page.size = int(heap['size'])
-            page.vaddr = base
-
+        page = pwndbg.memory.Page(0, 0, 0, 0)
+        brk = self.get_region()
+        if addr is None or brk.vaddr < addr < brk.vaddr + brk.memsz:
+            # Occasionally, the [heap] vm region and the actual start of the heap are
+            # different, e.g. [heap] starts at 0x61f000 but mp_.sbrk_base is 0x620000.
+            # Return an adjusted Page object if this is the case.
+            sbrk_base = int(self.mp['sbrk_base'])
+            if sbrk_base != brk.vaddr:
+                page.vaddr = sbrk_base
+                page.memsz = brk.memsz - (sbrk_base - brk.vaddr)
+                return page
+            else:
+                return brk
+        else:
+            page.vaddr = heap_for_ptr(addr)
+            heap = self.get_heap(page.vaddr)
+            page.memsz = int(heap['size'])
             return page
 
-        page = None
+
+    def get_region(self, addr=None):
+        """
+        Finds the memory map used for the heap at addr or the main heap by looking for a
+        mapping named [heap].
+        """
+        if addr:
+            return pwndbg.vmmap.find(addr)
+
+        # No address provided, find the vm region of the main heap.
+        brk = None
         for m in pwndbg.vmmap.get():
             if m.objfile == '[heap]':
-                page = m
+                brk = m
                 break
 
-        if page is not None:
-            mp = self.mp
-            if mp:
-                ## this can't fail right?
-                page.vaddr = int(mp['sbrk_base'])
-            return page
-
-        return None
-
+        return brk
 
     def fastbin_index(self, size):
         if pwndbg.arch.ptrsize == 8:
@@ -293,6 +416,7 @@ class Heap(pwndbg.heap.heap.BaseHeap):
 
 
     def fastbins(self, arena_addr=None):
+        """Returns: chain or None"""
         arena = self.get_arena(arena_addr)
 
         if arena is None:
@@ -310,10 +434,12 @@ class Heap(pwndbg.heap.heap.BaseHeap):
 
             result[size] = chain
 
+        result['type'] = 'fastbins'
         return result
 
 
     def tcachebins(self, tcache_addr=None):
+        """Returns: tuple(chain, count) or None"""
         tcache = self.get_tcache(tcache_addr)
 
         if tcache is None:
@@ -336,6 +462,7 @@ class Heap(pwndbg.heap.heap.BaseHeap):
 
             result[size] = (chain, count)
 
+        result['type'] = 'tcachebins'
         return result
 
 
@@ -349,6 +476,8 @@ class Heap(pwndbg.heap.heap.BaseHeap):
         Bin 1          - Unsorted BiN
         Bin 2 to 63    - Smallbins
         Bin 64 to 126  - Largebins
+
+        Returns: tuple(chain_from_bin_fd, chain_from_bin_bk, is_chain_corrupted) or None
         """
         index = index - 1
         arena = self.get_arena(arena_addr)
@@ -364,9 +493,24 @@ class Heap(pwndbg.heap.heap.BaseHeap):
 
         front, back = normal_bins[index * 2], normal_bins[index * 2 + 1]
         fd_offset   = self.chunk_key_offset('fd')
+        bk_offset   = self.chunk_key_offset('bk')
 
-        chain = pwndbg.chain.get(int(front), offset=fd_offset, hard_stop=current_base, limit=heap_chain_limit, include_start=False)
-        return chain
+        is_chain_corrupted = False
+
+        get_chain = lambda bin, offset: pwndbg.chain.get(int(bin), offset=offset, hard_stop=current_base, limit=heap_chain_limit, include_start=True)
+        chain_fd = get_chain(front, fd_offset)
+        chain_bk = get_chain(back, bk_offset)
+
+        # check if bin[index] points to itself (is empty)
+        if len(chain_fd) == len(chain_bk) == 2 and chain_fd[0] == chain_bk[0]:
+            chain_fd = [0]
+            chain_bk = [0]
+
+        # check if corrupted
+        elif chain_fd[:-1] != chain_bk[:-2][::-1] + [chain_bk[-2]]:
+            is_chain_corrupted = True
+
+        return (chain_fd, chain_bk, is_chain_corrupted)
 
 
     def unsortedbin(self, arena_addr=None):
@@ -378,6 +522,7 @@ class Heap(pwndbg.heap.heap.BaseHeap):
 
         result['all'] = chain
 
+        result['type'] = 'unsortedbin'
         return result
 
 
@@ -395,6 +540,7 @@ class Heap(pwndbg.heap.heap.BaseHeap):
 
             result[size] = chain
 
+        result['type'] = 'smallbins'
         return result
 
 
@@ -412,4 +558,16 @@ class Heap(pwndbg.heap.heap.BaseHeap):
 
             result[size] = chain
 
+        result['type'] = 'largebins'
         return result
+
+
+    def is_initialized(self):
+        """
+        malloc state is initialized when a new arena is created. 
+            https://sourceware.org/git/?p=glibc.git;a=blob;f=malloc/malloc.c;h=96149549758dd424f5c08bed3b7ed1259d5d5664;hb=HEAD#l1807
+        By default main_arena is partially initialized, and during the first usage of a glibc allocator function some other field are populated.
+        global_max_fast is one of them thus the call of set_max_fast() when initializing the main_arena, 
+        making it one of the ways to check if the allocator is initialized or not.
+        """
+        return self.global_max_fast != 0

@@ -258,7 +258,7 @@ def bl():
 @pwndbg.commands.Command
 def bd(which = '*'):
     """
-    Disable the breapoint with the specified index.
+    Disable the breakpoint with the specified index.
     """
     if which == '*':
         gdb.execute('disable breakpoints')
@@ -269,7 +269,7 @@ def bd(which = '*'):
 @pwndbg.commands.Command
 def be(which = '*'):
     """
-    Enable the breapoint with the specified index.
+    Enable the breakpoint with the specified index.
     """
     if which == '*':
         gdb.execute('enable breakpoints')
@@ -279,7 +279,7 @@ def be(which = '*'):
 @pwndbg.commands.Command
 def bc(which = '*'):
     """
-    Clear the breapoint with the specified index.
+    Clear the breakpoint with the specified index.
     """
     if which == '*':
         gdb.execute('delete breakpoints')
@@ -298,14 +298,14 @@ def bp(where):
 
 @pwndbg.commands.ParsedCommand
 @pwndbg.commands.OnlyWhenRunning
-def u(where=None, n=5):
+def u(where=None, n=5, to_string=False):
     """
     Starting at the specified address, disassemble
     N instructions (default 5).
     """
     if where is None:
         where = pwndbg.regs.pc
-    pwndbg.commands.nearpc.nearpc(where, n)
+    return pwndbg.commands.nearpc.nearpc(where, n, to_string)
 
 @pwndbg.commands.Command
 @pwndbg.commands.OnlyWhenRunning

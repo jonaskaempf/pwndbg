@@ -37,6 +37,7 @@ import pwndbg.commands.misc
 import pwndbg.commands.next
 import pwndbg.commands.peda
 import pwndbg.commands.pie
+import pwndbg.commands.probeleak
 import pwndbg.commands.procinfo
 import pwndbg.commands.radare2
 import pwndbg.commands.reload
@@ -137,7 +138,6 @@ set backtrace past-main on
 set step-mode on
 set print pretty on
 set width %i
-set print elements 15
 handle SIGALRM nostop print nopass
 handle SIGBUS  stop   print nopass
 handle SIGPIPE nostop print nopass

@@ -8,6 +8,8 @@ from __future__ import unicode_literals
 import ast
 import codecs
 import sys
+import ctypes
+from io import open
 
 import gdb
 
@@ -194,7 +196,7 @@ theme.Parameter('code-prefix', '►', "prefix marker for 'context code' command"
 @pwndbg.memoize.reset_on_start
 def get_highlight_source(filename):
     # Notice that the code is cached
-    with open(filename) as f:
+    with open(filename, encoding='utf-8') as f:
         source = f.read()
 
     if pwndbg.config.syntax_highlight:
@@ -214,9 +216,11 @@ def context_code():
         closest_pc = -1
         closest_line = -1
         for line in linetable:
-            if closest_pc < line.pc <= pwndbg.regs.pc:
+            real_address = ctypes.c_uint64(line.pc).value
+            # print("line is %d, address is %s" % (line.line, hex(real_address)))
+            if closest_pc < real_address <= pwndbg.regs.pc:
                 closest_line = line.line
-                closest_pc   = line.pc
+                closest_pc   = real_address
 
         if closest_line < 0:
             return []
@@ -260,7 +264,7 @@ def context_code():
             )
             formatted_source.append(line)
 
-        banner = [pwndbg.ui.banner("Source (code)")]
+        banner = [pwndbg.ui.banner("Source (code)"), 'In file: %s' % filename]
         banner.extend(formatted_source)
         return banner
     except:
