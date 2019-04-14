@@ -34,6 +34,7 @@ last_arch    = None
 CapstoneArch = {
     'arm': CS_ARCH_ARM,
     'aarch64': CS_ARCH_ARM64,
+    'i8086': CS_ARCH_X86,
     'i386': CS_ARCH_X86,
     'x86-64': CS_ARCH_X86,
     'powerpc': CS_ARCH_PPC,
@@ -47,6 +48,7 @@ CapstoneEndian = {
 }
 
 CapstoneMode = {
+    2: CS_MODE_16,
     4: CS_MODE_32,
     8: CS_MODE_64
 }
@@ -57,6 +59,7 @@ CapstoneMode = {
 #
 # This allows us to consistently disassemble backward.
 VariableInstructionSizeMax = {
+    'i8086':   16,
     'i386':   16,
     'x86-64': 16,
     'mips':   8,

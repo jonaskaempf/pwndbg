@@ -235,6 +235,7 @@ mips = RegisterSet( frame   = 'fp',
 
 arch_to_regs = {
     'i386': i386,
+    'i8086': i386,
     'x86-64': amd64,
     'mips': mips,
     'sparc': sparc,

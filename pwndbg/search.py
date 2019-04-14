@@ -16,7 +16,7 @@ import pwndbg.typeinfo
 import pwndbg.vmmap
 
 
-def search(searchfor, mappings=None, start=None, end=None, 
+def search(searchfor, mappings=None, start=None, end=None, readable=True,
            executable=False, writable=False):
     """Search inferior memory for a byte sequence.
 
@@ -43,6 +43,9 @@ def search(searchfor, mappings=None, start=None, end=None,
         maps = [m for m in maps if start in m]
     elif end:
         maps = [m for m in maps if (end-1) in m]
+
+    if readable:
+        maps = [m for m in maps if m.read]
 
     if executable:
         maps = [m for m in maps if m.execute]
