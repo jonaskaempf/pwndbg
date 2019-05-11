@@ -33,6 +33,7 @@ import pwndbg.commands.heap
 import pwndbg.commands.hexdump
 import pwndbg.commands.ida
 import pwndbg.commands.minfo
+import pwndbg.commands.leakfind
 import pwndbg.commands.misc
 import pwndbg.commands.next
 import pwndbg.commands.peda
@@ -108,6 +109,7 @@ __all__ = [
 'hexdump',
 'ida',
 'info',
+'leakfind',
 'linkmap',
 'malloc',
 'memoize',

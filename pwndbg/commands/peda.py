@@ -5,26 +5,25 @@ from __future__ import division
 from __future__ import print_function
 from __future__ import unicode_literals
 
+import argparse
 import sys
 
 import gdb
 
-import argparse
-
-import pwndbg.color.message as message
 import pwndbg.auxv
+import pwndbg.color.message as message
 import pwndbg.commands
 import pwndbg.commands.context
 import pwndbg.commands.telescope
 import pwndbg.proc
 
 
-@pwndbg.commands.Command
+@pwndbg.commands.ArgparsedCommand("Gets the current file.")
 @pwndbg.commands.OnlyWhenRunning
 def getfile():
     print(repr(pwndbg.auxv.get().AT_EXECFN))
 
-@pwndbg.commands.Command
+@pwndbg.commands.ArgparsedCommand("Get the pid.")
 @pwndbg.commands.OnlyWhenRunning
 def getpid():
     print(pwndbg.proc.pid)
