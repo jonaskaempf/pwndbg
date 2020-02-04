@@ -23,14 +23,19 @@ install_apt() {
     sudo apt-get -y install gdb python-dev python3-dev python-pip python3-pip libglib2.0-dev libc6-dbg
 
     if uname -m | grep x86_64 > /dev/null; then
-        sudo apt-get install libc6-dbg:i386 || true
+        sudo apt-get -y install libc6-dbg:i386 || true
     fi
 }
 
 install_dnf() {
     sudo dnf update || true
-    sudo dnf -y install gdb python-devel python3-devel python-pip python3-pip glib2-devel make
+    sudo dnf -y install gdb gdb-gdbserver python-devel python3-devel python-pip python3-pip glib2-devel make
     sudo dnf -y debuginfo-install glibc
+}
+
+install_swupd() {
+    sudo swupd update || true
+    sudo swupd bundle-add gdb python3-basic make c-basic
 }
 
 PYTHON=''
@@ -44,7 +49,7 @@ fi
 
 if linux; then
     distro=$(cat /etc/os-release | grep "^ID=" | cut -d\= -f2 | sed -e 's/"//g')
-    
+
     case $distro in
         "ubuntu")
             install_apt
@@ -52,6 +57,9 @@ if linux; then
         "fedora")
             install_dnf
             ;;
+	"clear-linux-os")
+	    install_swupd
+	    ;;
         "arch")
             echo "Install Arch linux using a community package. See:"
             echo " - https://www.archlinux.org/packages/community/any/pwndbg/"

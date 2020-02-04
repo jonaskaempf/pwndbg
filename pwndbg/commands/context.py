@@ -87,7 +87,7 @@ def output():
 parser = argparse.ArgumentParser()
 parser.description = "Print out the current register, instruction, and stack context."
 parser.add_argument("subcontext", nargs="*", type=str, default=None, help="Submenu to display: 'reg', 'disasm', 'code', 'stack', 'backtrace', and/or 'args'")
-@pwndbg.commands.ArgparsedCommand(parser)
+@pwndbg.commands.ArgparsedCommand(parser, aliases=['ctx'])
 @pwndbg.commands.OnlyWhenRunning
 def context(subcontext=None):
     """
@@ -110,6 +110,8 @@ def context(subcontext=None):
         func = context_sections.get(arg, None)
         if func:
             result.extend(func())
+    if len(result) > 0:
+        result.append(pwndbg.ui.banner(""))
     result.extend(context_signal())
 
     with output() as out:
@@ -167,30 +169,11 @@ def get_regs(*regs):
         change_marker = "%s" % C.config_register_changed_marker
         m = ' ' * len(change_marker) if reg not in changed else C.register_changed(change_marker)
 
-        if reg not in pwndbg.regs.flags:
-            desc = pwndbg.chain.format(value)
+        if reg in pwndbg.regs.flags:
+            desc = C.format_flags(value, pwndbg.regs.flags[reg], pwndbg.regs.last.get(reg, 0))
 
         else:
-            names = []
-            desc  = C.flag_value('%#x' % value)
-            last  = pwndbg.regs.last.get(reg, 0) or 0
-            flags = pwndbg.regs.flags[reg]
-
-            for name, bit in sorted(flags.items()):
-                bit = 1<<bit
-                if value & bit:
-                    name = name.upper()
-                    name = C.flag_set(name)
-                else:
-                    name = name.lower()
-                    name = C.flag_unset(name)
-
-                if value & bit != last & bit:
-                    name = C.flag_changed(name)
-                names.append(name)
-
-            if names:
-                desc = '%s %s %s %s' % (desc, C.flag_bracket('['), ' '.join(names), C.flag_bracket(']'))
+            desc = pwndbg.chain.format(value)
 
         result.append("%s%s %s" % (m, regname, desc))
 
@@ -249,7 +232,7 @@ def get_filename_and_formatted_source():
 
     try:
         source = get_highlight_source(filename)
-    except FileNotFoundError:
+    except IOError:
         return '', []
 
     if not source:
