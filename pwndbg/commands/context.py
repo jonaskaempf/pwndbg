@@ -9,6 +9,8 @@ import argparse
 import ast
 import codecs
 import ctypes
+import json
+import os
 import sys
 from collections import defaultdict
 from io import open
@@ -47,7 +49,7 @@ def clear_screen(out=sys.stdout):
 config_clear_screen = pwndbg.config.Parameter('context-clear-screen', False, 'whether to clear the screen before printing the context')
 config_output = pwndbg.config.Parameter('context-output', 'stdout', 'where pwndbg should output ("stdout" or file/tty).')
 config_context_sections = pwndbg.config.Parameter('context-sections',
-                                                  'regs disasm code stack backtrace',
+                                                  'regs disasm code ghidra stack backtrace expressions',
                                                   'which context sections are displayed (controls order)')
 
 # Storing output configuration per section
@@ -150,6 +152,157 @@ def contextoutput(section, path, clearing, banner="both", width=None):
                                     banner_top= banner in ["both", "top"],
                                     banner_bottom= banner in ["both", "bottom"])
 
+# Watches
+expressions = set()
+expression_commands = {
+    "eval": gdb.parse_and_eval,
+    "execute": lambda exp: gdb.execute(exp, False, True)
+}
+
+parser = argparse.ArgumentParser()
+parser.description = """
+Adds an expression to be shown on context.
+
+'cmd' controls what command is used to interpret the expression.
+eval: the expression is parsed and evaluated as in the debugged language
+execute: the expression is executed as an gdb command
+"""
+parser.add_argument("cmd", type=str, default="eval", nargs="?",
+                    help="Command to be used with the expression. Values are: eval execute")
+parser.add_argument("expression", type=str, help="The expression to be evaluated and shown in context")
+@pwndbg.commands.ArgparsedCommand(parser, aliases=['ctx-watch', 'cwatch'])
+def contextwatch(expression, cmd=None):
+    expressions.add((expression, expression_commands.get(cmd, gdb.parse_and_eval)))
+
+parser = argparse.ArgumentParser()
+parser.description = """Removes an expression previously added to be watched."""
+parser.add_argument("expression", type=str, help="The expression to be removed from context")
+@pwndbg.commands.ArgparsedCommand(parser, aliases=['ctx-unwatch', 'cunwatch'])
+def contextunwatch(expression):
+    global expressions
+    expressions = set((exp,cmd) for exp,cmd in expressions if exp != expression)
+
+def context_expressions(target=sys.stdout, with_banner=True, width=None):
+    if not expressions:
+        return []
+    banner = [pwndbg.ui.banner("expressions", target=target, width=width)]
+    output = []
+    if width is None:
+        _height, width = pwndbg.ui.get_window_size(target=target)
+    for exp,cmd in sorted(expressions):
+        try:
+            # value = gdb.parse_and_eval(exp)
+            value = str(cmd(exp))
+        except gdb.error as err:
+            value = str(err)
+        value = value.split("\n")
+        lines = []
+        for line in value:
+            if width and len(line)+len(exp)+3 > width:
+                n = width - (len(exp)+3) - 1 # 1 Padding...
+                lines.extend(line[i:i+n] for i in range(0, len(line), n))
+            else:
+                lines.append(line)
+
+        fmt = C.highlight(exp)
+        lines[0] = "{} = {}".format(fmt, lines[0])
+        lines[1:] = [" "*(len(exp)+3) + line for line in lines[1:]]
+        output.extend(lines)
+    return banner + output if with_banner else output
+
+# Ghidra integration through radare2
+# This is not (sorry couldn't help it) "the yellow of the egg"
+# Using radare2 is suboptimal and will only be an intermediate step to have
+# ghidra decompiler within pwndbg.
+# But having ghidra in pwndgb is a lot more work as it requires quite some code and c/c++
+radare2 = {}
+
+config_context_ghidra = pwndbg.config.Parameter('context-ghidra',
+                                                  'never',
+                                                  'if or/when to try to decompile with '
+                                                  'ghidra (slow and requires radare2/r2pipe) '
+                                                  '(valid values: always, never, if-no-source)')
+def init_radare2(filename):
+    r2 = radare2.get(filename)
+    if r2:
+        return r2
+    import r2pipe
+    r2 = r2pipe.open(filename)
+    radare2[filename] = r2
+    r2.cmd("aaaa")
+    return r2
+
+parser = argparse.ArgumentParser()
+parser.description = """Show current function decompiled by ghidra"""
+parser.add_argument("func", type=str, default=None, nargs="?",
+                    help="Function to be shown. Defaults to current")
+@pwndbg.commands.ArgparsedCommand(parser, aliases=['ctx-ghidra'])
+def contextghidra(func):
+    print("\n".join(context_ghidra(func, with_banner=False, force_show=True)))
+
+def context_ghidra(func=None, target=sys.stdout, with_banner=True, width=None, force_show=False):
+    banner = [pwndbg.ui.banner("ghidra decompile", target=target, width=width)]
+
+    if config_context_ghidra == "never" and not force_show:
+        return []
+    elif config_context_ghidra == "if-no-source" and not force_show:
+        try:
+            with open(gdb.selected_frame().find_sal().symtab.fullname()) as _:
+                pass
+        except:         # a lot can go wrong in search of source code.
+            return []   # we don't care what, just that it did not work out well...
+
+    filename = gdb.current_progspace().filename
+    try:
+        r2 = init_radare2(filename)
+        # LD         list supported decompilers (e cmd.pdc=?)
+        # Outputs for example:: pdc\npdg
+        if not "pdg" in r2.cmd("LD").split("\n"):
+            return banner + ["radare2 plugin r2ghidra-dec must be installed and available from r2"]
+    except ImportError: # no r2pipe present
+        return banner + ["r2pipe not available, but required for r2->ghidra-bridge"]
+    if func is None:
+        try:
+            func = hex(pwndbg.regs[pwndbg.regs.current.pc])
+        except:
+            func = "main"
+    src = r2.cmdj("pdgj @" + func)
+    source = src.get("code", "")
+    curline = None
+    try:
+        cur = pwndbg.regs[pwndbg.regs.current.pc]
+    except AttributeError:
+        cur = None # If not running there is no current.pc
+    if cur is not None:
+        closest = 0
+        for off in (a.get("offset", 0) for a in src.get("annotations", [])):
+            if abs(cur - closest) > abs(cur - off):
+                closest = off
+        pos_annotations = sorted([a for a in src.get("annotations", []) if a.get("offset") == closest],
+                         key=lambda a: a["start"])
+        if pos_annotations:
+            curline = source.count("\n", 0, pos_annotations[0]["start"])
+    source = source.split("\n")
+    # Append --> for the current line if possible
+    if curline is not None:
+        line = source[curline]
+        if line.startswith('    '):
+            line = line[4:]
+        source[curline] = '--> ' + line
+    # Join the source for highlighting
+    source = "\n".join(source)
+    if pwndbg.config.syntax_highlight:
+        # highlighting depends on the file extension to guess the language, so try to get one...
+        try: # try to read the source filename from debug information
+            src_filename = gdb.selected_frame().find_sal().symtab.fullname()
+        except: # if non, take the original filename and maybe append .c (just assuming is was c)
+            src_filename = filename+".c" if os.path.basename(filename).find(".") < 0 else filename
+        source = H.syntax_highlight(source, src_filename)
+    source = source.split("\n")
+    return banner + source if with_banner else source
+
+
+
 # @pwndbg.events.stop
 
 parser = argparse.ArgumentParser()
@@ -187,10 +340,10 @@ def context(subcontext=None):
                                            with_banner=settings.get("banner_top", True)))
 
     for target, res in result.items():
-        settings = result_settings[target] 
+        settings = result_settings[target]
         if len(res) > 0 and settings.get("banner_bottom", True):
             with target as out:
-                res.append(pwndbg.ui.banner("", target=out, 
+                res.append(pwndbg.ui.banner("", target=out,
                                             width=settings.get("width", None)))
 
     for target, lines in result.items():
@@ -498,7 +651,9 @@ context_sections = {
     'a': context_args,
     'c': context_code,
     's': context_stack,
-    'b': context_backtrace
+    'b': context_backtrace,
+    'e': context_expressions,
+    'g': context_ghidra,
 }
 
 
