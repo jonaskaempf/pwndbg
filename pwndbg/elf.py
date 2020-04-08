@@ -175,23 +175,27 @@ def get_containing_sections(elf_filepath, elf_loadaddr, vaddr):
 
 
 @pwndbg.proc.OnlyWhenRunning
-def get_load_segment_info():
-    local_path = pwndbg.file.get_file(pwndbg.proc.exe)
+def get_load_segment_info(filepath=None):
+    if filepath is None:
+        filepath = pwndbg.proc.exe
+
+    local_path = pwndbg.file.get_file(filepath)
     segments = []
     with open(local_path, 'rb') as f:
         elffile = ELFFile(f)
         for seg in elffile.iter_segments():
             if seg['p_type'] == 'PT_LOAD':
-                segments.append({
-                    "Offset":   seg['p_offset'],
-                    "VirtAddr": seg['p_vaddr'],
-                    "PhysAddr": seg['p_paddr'],
-                    "FileSiz":  seg['p_filesz'],
-                    "MemSiz":   seg['p_memsz'],
-                    "FlagsRead": seg['p_flags'] & PF_R != 0,
-                    "FlagsWrite": seg['p_flags'] & PF_W != 0,
-                    "FlagsExecute": seg['p_flags'] & PF_X != 0
-                })
+                segments.append(seg)
+                # {
+                #     "Offset":   seg['p_offset'],
+                #     "VirtAddr": seg['p_vaddr'],
+                #     "PhysAddr": seg['p_paddr'],
+                #     "FileSiz":  seg['p_filesz'],
+                #     "MemSiz":   seg['p_memsz'],
+                #     "FlagsRead": seg['p_flags'] & PF_R != 0,
+                #     "FlagsWrite": seg['p_flags'] & PF_W != 0,
+                #     "FlagsExecute": seg['p_flags'] & PF_X != 0
+                # })
 
     return segments
 
@@ -203,6 +207,22 @@ def exe():
     Return a loaded ELF header object pointing to the Ehdr of the
     main executable.
     """
+    # Seems this API-level function is mostly used by callers to get .address
+    #
+    # Why not first try to parse the local main executable?
+    if pwndbg.qemu.is_qemu_kernel():
+        # To not break anything, only do when QEMU kernel debugging
+        local_path = pwndbg.proc.exe
+        if local_path is not None:
+            elfinf = get_elf_info(local_path)
+            # Apparently, an "exe" needs some kind of ".address"
+            # It seems this was confusingly set to the start address of
+            # the ElfHdr, (let's hope that is loaded into memory then...).
+            # Unclear what it's supposed to represent, and what it's used for.
+            setattr(elfinf, 'address', 0)
+            return elfinf
+
+    # The ELF header might not even be laoded (close to) the entry point?!
     e = entry()
     if e:
         return load(e)
@@ -305,7 +325,7 @@ def get_ehdr(pointer):
     # This will hang the gdb when using the remote gdbserver to scan 1024 pages
     base = find_elf_magic(pointer, search_down=True)
     if base is None:
-        if pwndbg.abi.linux:
+        if pwndbg.abi.linux and not pwndbg.qemu.is_qemu_kernel():
             print("ERROR: Could not find ELF base!")
         return None, None
 
@@ -335,6 +355,8 @@ def get_phdrs(pointer):
     x = (phnum, phentsize, read(Phdr, Elfhdr.address + phoff))
     return x
 
+
+## External API
 
 def iter_phdrs(ehdr):
     if not ehdr:
@@ -374,8 +396,16 @@ def map(pointer, objfile=''):
          Page('7ffff79a2000-7ffff79a6000 r--p 0x4000 1bb000'),
          Page('7ffff79a6000-7ffff79ad000 rw-p 0x7000 1bf000')]
     """
+    if pwndbg.qemu.is_qemu_kernel():
+        segments = get_load_segment_info(objfile)
+        for seg in segments:
+            yield pwndbg.memory.Page(seg['p_vaddr'], seg['p_memsz'], seg['p_flags'], seg['p_offset'], objfile)
+
     ei_class, ehdr         = get_ehdr(pointer)
     return map_inner(ei_class, ehdr, objfile)
+
+
+## Internal API
 
 
 def map_inner(ei_class, ehdr, objfile):
