@@ -293,7 +293,8 @@ class module(ModuleType):
                 if attr.lower() == 'xpsr':
                     attr = 'xPSR'
                 value = get_register(attr)
-                value = value.cast(pwndbg.typeinfo.ptrdiff)
+                size = pwndbg.typeinfo.unsigned.get(value.type.sizeof, pwndbg.typeinfo.ulong)
+                value = value.cast(size)
 
             value = int(value)
             return value & pwndbg.arch.ptrmask
@@ -303,9 +304,6 @@ class module(ModuleType):
     @pwndbg.memoize.reset_on_stop
     @pwndbg.memoize.reset_on_prompt
     def __getitem__(self, item):
-        if isinstance(item, six.integer_types):
-            return arch_to_regs[pwndbg.arch.current][item]
-
         if not isinstance(item, six.string_types):
             print("Unknown register type: %r" % (item))
             import pdb, traceback
@@ -323,7 +321,7 @@ class module(ModuleType):
         return item
 
     def __iter__(self):
-        regs = set(arch_to_regs[pwndbg.arch.current]) | set(['pc','sp'])
+        regs = set(arch_to_regs[pwndbg.arch.current]) | {'pc', 'sp'}
         for item in regs:
             yield item
 
@@ -388,7 +386,7 @@ class module(ModuleType):
     @property
     def changed(self):
         delta = []
-        for reg, value in self.last.items():
+        for reg, value in self.previous.items():
             if self[reg] != value:
                 delta.append(reg)
         return delta
@@ -443,6 +441,7 @@ sys.modules[__name__] = module(__name__, '')
 @pwndbg.events.stop
 def update_last():
     M = sys.modules[__name__]
+    M.previous = M.last
     M.last = {k:M[k] for k in M.common}
     if pwndbg.config.show_retaddr_reg:
         M.last.update({k:M[k] for k in M.retaddr})
