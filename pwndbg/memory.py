@@ -102,7 +102,7 @@ def write(addr, data):
     gdb.selected_inferior().write_memory(addr, data)
 
 
-def peek(address):
+def peek(address, n=1):
     """peek(address) -> str
 
     Read one byte from the specified address.
@@ -114,7 +114,7 @@ def peek(address):
         :class:`str`: A single byte of data, or ``None`` if the
         address cannot be read.
     """
-    try:    return read(address, 1)
+    try:    return read(address, n)
     except: pass
     return None
 
